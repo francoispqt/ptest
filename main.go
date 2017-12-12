@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -15,7 +16,8 @@ import (
 
 // constants
 const (
-	vendorDir = "vendor"
+	vendorDir    = "vendor"
+	SkipFileName = ".ptestskip"
 )
 
 // variables, goPath, colors and al
@@ -25,6 +27,13 @@ var (
 	red    = color.New(color.FgRed).SprintFunc()
 	green  = color.New(color.FgGreen).SprintFunc()
 )
+
+func getArgs(args []string) (string, []string, error) {
+	if len(args) < 2 {
+		return "", []string{}, errors.New("Usage ptest ${packageImportPath}")
+	}
+	return args[1], args[2:], nil
+}
 
 // TestRunner interface for testing
 type TestRunner interface {
@@ -43,9 +52,9 @@ func (t Test) Run(testsResult chan TestResult, args []string) {
 	log.Printf("Testing %s", yellow(t.Package()))
 	out, err := exec.Command("go", cmdArgs...).Output()
 	testsResult <- TestResult{out, err, t.Package()}
-	return
 }
 
+// Package return the name of the package
 func (t Test) Package() string {
 	return t.PackageName
 }
@@ -58,24 +67,27 @@ type TestResult struct {
 }
 
 // NewTests gets a list of the testable packages and subpackages and runs tests
-func NewTests(dirPath string, testsResultChan chan TestResult, args []string) []TestRunner {
+func NewTests(dirPath string, testsResultChan chan TestResult, args []string, allowSkip bool) []TestRunner {
 	tests := make([]TestRunner, 0)
 	files, err := ioutil.ReadDir(goPath + "/src/" + dirPath)
 	if err != nil {
 		panic(err)
 	}
 	hasTest := false
+	skip := false
 	for _, f := range files {
 		// avoid testing
 		if f.IsDir() && f.Name() != vendorDir {
 			// should run concurrently
-			tests = append(tests, NewTests(dirPath+"/"+f.Name(), testsResultChan, args)...)
-		} else if strings.HasSuffix(f.Name(), "_test.go") && hasTest == false {
+			tests = append(tests, NewTests(dirPath+"/"+f.Name(), testsResultChan, args, allowSkip)...)
+		} else if strings.HasSuffix(f.Name(), "_test.go") && !hasTest && !skip {
 			test := Test{dirPath}
 			tests = append(tests, test)
 			// run test
 			go test.Run(testsResultChan, args)
 			hasTest = true
+		} else if f.Name() == SkipFileName && allowSkip {
+			skip = true
 		}
 	}
 	return tests
@@ -91,7 +103,7 @@ func GetTestsResult(testsResultChan chan TestResult, nTests []TestRunner) int {
 			fmt.Println(string(testResult.Out))
 			success = 1
 		} else {
-			log.Printf(green("✓ %s"), string(testResult.Package))
+			log.Printf(green("✓ %s"), testResult.Package)
 			fmt.Println(string(testResult.Out))
 		}
 		count++
@@ -109,17 +121,27 @@ func GetTestsResult(testsResultChan chan TestResult, nTests []TestRunner) int {
 	return success
 }
 
-func getArgs(args []string) (string, []string) {
-	return args[1], args[2:]
+// Run runs the tests suite
+func Run(packageRoot string, args []string) int {
+	// create tests by recursively getting subpackages
+	testsResultChan := make(chan TestResult)
+	// get tests and run
+	tests := NewTests(packageRoot, testsResultChan, args, true)
+	if len(tests) == 0 {
+		log.Print(red("No tests to run !"))
+		return 1
+	}
+	return GetTestsResult(testsResultChan, tests)
 }
 
 func main() {
 	// get args, first arg is the path for the rootPackage, slice the rest to pass to go test
-	packageRoot, args := getArgs(os.Args)
-	// create tests by recursively getting subpackages
-	testsResultChan := make(chan TestResult)
-	// get tests and run
-	tests := NewTests(packageRoot, testsResultChan, args)
+	packageRoot, args, err := getArgs(os.Args)
+	if err != nil {
+		log.Print(red(err.Error()))
+		os.Exit(1)
+	}
+
 	// check results
-	os.Exit(GetTestsResult(testsResultChan, tests))
+	os.Exit(Run(packageRoot, args))
 }
