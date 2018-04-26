@@ -123,14 +123,15 @@ func GetTestsResult(testsResultChan chan TestResult, nTests []TestRunner) int {
 
 // Run runs the tests suite
 func Run(packageRoot string, args []string) int {
-	// create tests by recursively getting subpackages
+	// create chan an defer its closure
 	testsResultChan := make(chan TestResult)
-	// get tests and run
+	// create tests by recursively getting subpackages
 	tests := NewTests(packageRoot, testsResultChan, args, true)
 	if len(tests) == 0 {
 		log.Print(red("No tests to run !"))
 		return 1
 	}
+	// get tests results fron channel
 	return GetTestsResult(testsResultChan, tests)
 }
 
